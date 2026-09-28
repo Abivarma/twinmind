@@ -52,25 +52,46 @@ class Ctx:
         self.stt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt")
         self._finalize_lock = threading.Lock()
 
+    def save_transcript(self, s: dict) -> None:
+        """Readable markdown copy of the session; written before (and regardless of) the LLM."""
+        self.memory.index_file(self.sessions.write_markdown(s, self.name))
+
     def finalize(self, sid: str) -> dict | None:
-        """Summarize a session and fold what was learned into memory (blocking)."""
+        """Summarize a session and fold what was learned into memory (blocking).
+
+        The transcript is persisted first, so an LLM failure never loses it; a failed summary
+        keeps any earlier good summary and records why it failed.
+        """
         with self._finalize_lock:
             s = self.sessions.get(sid)
-            if not s or not s["segments"]:
+            if not s:
+                return None
+            self.save_transcript(s)
+            if not s["segments"]:
+                s["summary_status"] = "empty: nothing was transcribed (check the STT backend and mic)"
+                self.sessions.save(s)
+                self.save_transcript(s)
                 return s
+            s["summary_status"] = "running"
+            self.sessions.save(s)
             summary = self.twin.summarize(s["segments"], s["title"])
-            if not summary.get("summary"):
-                summary["summary"] = "_Summary unavailable (LLM error). Transcript saved._"
+            if "_error" in summary:
+                s["summary_status"] = "failed: " + summary["_error"]
+                self.sessions.save(s)
+                self.save_transcript(s)
+                return s
+            s["summary_status"] = "ok" + (f" ({summary.pop('_warning')})" if "_warning" in summary else "")
             s["summary"] = summary
             if summary.get("title") and s["title"].startswith("Session "):
                 s["title"] = summary["title"]
             self.memory.delete_session_actions(sid)
             to_apply = summary if not s.get("memory_applied") else {
                 "action_items": summary.get("action_items", [])}
-            s["memory_update"] = self.memory.apply_extraction(to_apply, sid, s["started"][:10])
+            s["memory_update"] = self.memory.apply_extraction(
+                to_apply, sid, s["started"][:10], session_title=s["title"])
             s["memory_applied"] = True
             self.sessions.save(s)
-            self.memory.index_file(self.sessions.write_markdown(s, self.name))
+            self.save_transcript(s)
             return s
 
 
@@ -169,6 +190,7 @@ class LiveRun:
             self.sink.close()
         self.s["ended"] = dt.datetime.now().isoformat(timespec="seconds")
         self.ctx.sessions.save(self.s)
+        self.ctx.save_transcript(self.s)
 
 
 def create_app(cfg: dict | None = None, transcriber: Transcriber | None = None,
@@ -248,6 +270,14 @@ def create_app(cfg: dict | None = None, transcriber: Transcriber | None = None,
             raise HTTPException(404)
         return s
 
+    @app.get("/api/sessions/{sid}/export")
+    def export(sid: str):
+        s = ctx.sessions.get(sid)
+        if not s:
+            raise HTTPException(404)
+        path = ctx.sessions.write_markdown(s, ctx.name)
+        return FileResponse(path, media_type="text/markdown", filename=f"{s['title'][:60]} ({sid}).md")
+
     @app.post("/api/sessions/{sid}/summarize")
     def resummarize(sid: str):
         if not ctx.sessions.get(sid):
@@ -258,6 +288,7 @@ def create_app(cfg: dict | None = None, transcriber: Transcriber | None = None,
     def delete_session(sid: str):
         ctx.sessions.delete(sid)
         ctx.memory.delete_session_actions(sid)
+        ctx.memory.write_actions_md()
         ctx.memory.reindex_all()
         return {"ok": True}
 
@@ -277,6 +308,12 @@ def create_app(cfg: dict | None = None, transcriber: Transcriber | None = None,
         s["ended"] = dt.datetime.now().isoformat(timespec="seconds")
         ctx.sessions.save(s)
         return await loop.run_in_executor(None, ctx.finalize, s["id"])
+
+    @app.get("/api/paths")
+    def paths():
+        d = Path(cfg["data_dir"]).resolve()
+        return {"sessions": str(d / "sessions"), "memory": str(d / "memory"),
+                "actions": str(d / "memory" / "actions.md")}
 
     # ---------- chat over memory ----------
     @app.post("/api/chat")

@@ -42,8 +42,8 @@ class FakeLLM(LLM):
     def __init__(self):
         self.calls = []
 
-    def complete(self, system, messages, max_tokens=4000, live=False):
-        prompt = messages[-1]["content"]
+    def complete(self, system, messages, max_tokens=4000, live=False, json_mode=False):
+        prompt = messages[0]["content"] if "not valid JSON" in messages[-1]["content"] else messages[-1]["content"]
         self.calls.append((system, prompt))
         if '"say_next"' in prompt:
             return 'Sure: {"say_next": "We ship Apollo in Q3.", "questions_to_ask": ["What is the risk?"], "facts": [], "flags": [], "pending_question": "When?"}'
@@ -184,3 +184,86 @@ def test_ollama_live_disables_thinking_and_uses_live_model(monkeypatch):
     assert "think" not in sent[1]  # retried without the toggle
     llm.complete("sys", [{"role": "user", "content": "q"}])
     assert sent[-1]["model"] == "big" and "think" not in sent[-1]
+
+
+class FailingLLM(FakeLLM):
+    def complete(self, system, messages, max_tokens=4000, live=False, json_mode=False):
+        return self._fail("Claude not configured: set ANTHROPIC_API_KEY")
+
+
+class FlakyJsonLLM(FakeLLM):
+    """First summary reply is broken JSON; the retry succeeds."""
+
+    def __init__(self):
+        super().__init__()
+        self.broke = False
+
+    def complete(self, system, messages, max_tokens=4000, live=False, json_mode=False):
+        if '"learned_about_me"' in messages[-1]["content"] and not self.broke:
+            self.broke = True
+            return '{"title": "Apollo", "summary": "- cut off'
+        return super().complete(system, messages, max_tokens, live, json_mode)
+
+
+def _session_with_lines(client, n=3):
+    ctx = client.app.state.ctx
+    s = ctx.sessions.create("Budget review")
+    s["segments"] = [{"speaker": "them" if i % 2 else "me", "text": f"line {i} about the budget", "t": i}
+                     for i in range(n)]
+    ctx.sessions.save(s)
+    return ctx, s["id"]
+
+
+def test_llm_failure_keeps_transcript_and_explains(tmp_path):
+    cfg = load_settings()
+    cfg["data_dir"] = tmp_path
+    client = TestClient(create_app(cfg, transcriber=FakeSTT(), llm=FailingLLM()))
+    ctx, sid = _session_with_lines(client)
+    s = client.post(f"/api/sessions/{sid}/summarize").json()
+    assert s["summary_status"].startswith("failed: Claude not configured")
+    assert s["summary"] is None
+    md_file = tmp_path / f"sessions/{sid}.md"
+    assert "line 2 about the budget" in md_file.read_text()        # transcript stored anyway
+    assert "Summary status: failed" in md_file.read_text()
+    r = client.get(f"/api/sessions/{sid}/export")
+    assert r.status_code == 200 and "line 0 about the budget" in r.text
+    assert client.get("/api/search", params={"q": "budget"}).json()  # transcript searchable
+
+
+def test_bad_json_is_retried_and_actions_mirrored(tmp_path):
+    cfg = load_settings()
+    cfg["data_dir"] = tmp_path
+    client = TestClient(create_app(cfg, transcriber=FakeSTT(), llm=FlakyJsonLLM()))
+    ctx, sid = _session_with_lines(client)
+    s = client.post(f"/api/sessions/{sid}/summarize").json()
+    assert s["summary_status"] == "ok"
+    acts = client.get("/api/actions").json()
+    assert acts[0]["text"] == "Send Apollo plan" and acts[0]["session_title"] == "Budget review"
+    mirror = (tmp_path / "memory/actions.md").read_text()
+    assert "- [ ] Send Apollo plan — owner: me, due: Friday · Budget review" in mirror
+    client.post(f"/api/actions/{acts[0]['id']}/toggle")
+    assert "- [x] Send Apollo plan" in (tmp_path / "memory/actions.md").read_text()
+
+
+def test_long_transcript_is_split_and_merged(tmp_path):
+    from app.twin import Twin
+
+    llm = FakeLLM()
+    twin = Twin(llm, MemoryStore(tmp_path), "Abi", chunk_chars=2000)
+    segs = [{"speaker": "me", "text": "x" * 300 + f" point {i}", "t": i} for i in range(20)]
+    out = twin.summarize(segs, "Long call")
+    extract_calls = [p for _, p in llm.calls if '"learned_about_me"' in p]
+    assert len(extract_calls) > 1                       # split into parts
+    assert all(len(p) < 6000 for p in extract_calls)     # each part fits the window
+    assert out["action_items"] == [{"text": "Send Apollo plan", "owner": "me", "due": "Friday"}]  # deduped
+    assert out["summary"]
+
+
+def test_placeholder_values_are_blanked(tmp_path):
+    from app.twin import Twin
+
+    class Lazy(FakeLLM):
+        def complete(self, *a, **k):
+            return '{"pending_question": "empty", "say_next": "Ship it.", "questions_to_ask": ["None"], "facts": [], "flags": "none"}'
+    out = Twin(Lazy(), MemoryStore(tmp_path), "Abi").live_suggestions([{"speaker": "me", "text": "hi", "t": 0}])
+    assert out == {"pending_question": "", "say_next": "Ship it.", "questions_to_ask": [], "facts": [], "flags": []}

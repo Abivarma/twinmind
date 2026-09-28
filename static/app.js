@@ -34,8 +34,9 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
+let STT = "";
 api("/api/health").then((h) => {
-  ME = h.name;
+  ME = h.name; STT = h.stt;
   $("#health").innerHTML = `STT: ${esc(h.stt)} (${esc(h.stt_model)}) · LLM: ${esc(h.llm)} ${esc(h.model)} · ` +
     (h.private ? `<span class="priv">fully local</span>` : "transcripts sent to LLM API") +
     (h.keep_audio ? " · audio kept" : " · audio discarded");
@@ -80,6 +81,7 @@ async function addSource(stream, id, meter) {
 async function start() {
   const them = $("#themSource").value, useMic = $("#useMic").checked;
   if (!useMic && them === "none") return alert("Pick at least one audio source.");
+  if (STT === "none" && !confirm("No speech-to-text backend is installed, so nothing will be transcribed (only typed notes are saved).\n\nFix: run ./twin, or pip install -r requirements-mac.txt.\n\nStart anyway?")) return;
   try {
     audioCtx = new AudioContext({ sampleRate: 16000 });
     await audioCtx.audioWorklet.addModule("/static/pcm-worklet.js");
@@ -129,7 +131,13 @@ function onLive(m) {
   else if (m.type === "suggestions") { $("#thinking").hidden = true; addSuggestions(m); }
   else if (m.type === "answer") { $("#thinking").hidden = true; addCard("answer", m.question ? `Answer: ${m.question}` : "Say this", `<div class="say-text">${md(m.text)}</div>`); }
   else if (m.type === "status") addCard("", "Status", esc(m.text));
-  else if (m.type === "summary") { addCard("say", "Session summary", md(m.session?.summary?.summary || "(empty session)")); ws.close(); }
+  else if (m.type === "summary") {
+    const st = m.session?.summary_status || "";
+    const acts = (m.session?.summary?.action_items || []).map((a) => `- ${a.text} (${a.owner || "?"})`).join("\n");
+    if (st.startsWith("ok")) addCard("say", "Session summary", md(m.session.summary.summary) + (acts ? "<div class='label'>Action items</div>" + md(acts) : ""));
+    else addCard("flag", "Summary problem", esc(st) + "<br><small>Transcript is saved. Open Sessions to retry.</small>");
+    ws.close();
+  }
 }
 
 function addSegment(m) {
@@ -217,7 +225,7 @@ $("#chatForm").onsubmit = async (e) => {
 // ---------- sessions ----------
 async function loadSessions() {
   const list = await api("/api/sessions");
-  $("#sessionList").innerHTML = list.map((s) => `<div class="item" data-id="${esc(s.id)}">${esc(s.title)}<small>${esc(s.started.replace("T", " "))} · ${s.segments} lines${s.summarized ? "" : " · not summarized"}</small></div>`).join("") || `<p class="muted">No sessions yet.</p>`;
+  $("#sessionList").innerHTML = list.map((s) => `<div class="item" data-id="${esc(s.id)}">${esc(s.title)}<small>${esc(s.started.replace("T", " "))} · ${s.segments} lines${s.summarized ? "" : " · <b>not summarized</b>"}</small></div>`).join("") || `<p class="muted">No sessions yet.</p>`;
   $("#sessionList").querySelectorAll(".item").forEach((el) => el.onclick = () => showSession(el.dataset.id));
 }
 async function showSession(id) {
@@ -225,18 +233,29 @@ async function showSession(id) {
   const s = await api(`/api/sessions/${id}`), sm = s.summary || {};
   const lines = s.segments.map((g) => `<div class="seg ${g.speaker}"><span class="ts">${fmt(g.t)}</span><span class="who">${esc(g.speaker === "me" ? ME : g.speaker === "note" ? "Note" : "Them")}</span>${esc(g.text)}</div>`).join("");
   const acts = (sm.action_items || []).map((a) => `- ${a.text} (${a.owner || "?"}${a.due ? ", " + a.due : ""})`).join("\n");
+  const st = s.summary_status || (s.summary ? "ok" : "not summarized");
+  const banner = st.startsWith("ok") ? (st.length > 2 ? `<p class="muted">${esc(st)}</p>` : "") :
+    `<div class="card flag"><div class="label">Summary ${st === "running" ? "in progress" : "problem"}</div>${esc(st)}<br><small class="muted">The transcript below is saved either way. Fix the cause, then press Re-summarize.</small></div>`;
   $("#sessionView").innerHTML = `
     <div class="row"><h2 class="grow" style="margin:0">${esc(s.title)}</h2>
+      <a href="/api/sessions/${esc(id)}/export"><button>Download .md</button></a>
+      <button id="copyTx">Copy transcript</button>
       <button id="resum">Re-summarize</button><button id="del" class="danger">Delete</button></div>
+    <small class="muted">${esc(s.started.replace("T", " "))} · ${s.segments.length} lines · saved at data/sessions/${esc(id)}.md</small>
     <div class="scroll md">
-      ${md(sm.summary || "_Not summarized yet._")}
+      ${banner}
+      ${md(sm.summary || "")}
       ${sm.decisions?.length ? "<h3>Decisions</h3>" + md(sm.decisions.map((d) => "- " + d).join("\n")) : ""}
-      ${acts ? "<h3>Action items</h3>" + md(acts) : ""}
+      ${acts ? "<h3>Action items</h3>" + md(acts) : sm.summary ? '<h3>Action items</h3><p class="muted">None found.</p>' : ""}
       ${sm.followups ? "<h3>Follow-ups</h3>" + md(sm.followups) : ""}
       ${s.memory_update?.files?.length ? `<p class="muted">Memory updated: ${esc(s.memory_update.files.join(", "))}</p>` : ""}
       <h3>Transcript</h3>${lines || '<p class="muted">Empty.</p>'}
     </div>`;
-  $("#resum").onclick = async () => { $("#resum").textContent = "Working…"; await api(`/api/sessions/${id}/summarize`, { method: "POST" }); showSession(id); loadSessions(); };
+  $("#copyTx").onclick = async () => {
+    const txt = s.segments.map((g) => `[${fmt(g.t)}] ${g.speaker === "me" ? ME : g.speaker === "note" ? "Note" : "Them"}: ${g.text}`).join("\n");
+    await navigator.clipboard.writeText(txt); $("#copyTx").textContent = "Copied ✓";
+  };
+  $("#resum").onclick = async () => { $("#resum").textContent = "Working…"; $("#resum").disabled = true; await api(`/api/sessions/${id}/summarize`, { method: "POST" }); showSession(id); loadSessions(); };
   $("#del").onclick = async () => { if (confirm("Delete this session and its action items?")) { await api(`/api/sessions/${id}`, { method: "DELETE" }); $("#sessionView").innerHTML = ""; loadSessions(); } };
 }
 $("#uploadInput").onchange = async (e) => {
@@ -288,7 +307,8 @@ $("#searchForm").onsubmit = async (e) => {
 // ---------- actions & digest ----------
 async function loadActions() {
   const acts = await api("/api/actions");
-  $("#actionList").innerHTML = acts.map((a) => `<label class="action"><input type="checkbox" data-id="${a.id}"><span>${esc(a.text)}<br><small>${esc(a.owner || "?")}${a.due ? " · due " + esc(a.due) : ""} · ${esc(a.created.slice(0, 10))}</small></span></label>`).join("") || `<p class="muted">Nothing open.</p>`;
+  $("#actionList").innerHTML = acts.map((a) => `<div class="action"><input type="checkbox" data-id="${a.id}"><span>${esc(a.text)}<br><small>${esc(a.owner || "?")}${a.due ? " · due " + esc(a.due) : ""} · ${esc(a.created.slice(0, 10))} · <a href="#" data-sid="${esc(a.session_id)}">${esc(a.session_title || "open session")}</a></small></span></div>`).join("") || `<p class="muted">Nothing open.</p>`;
+  $("#actionList").querySelectorAll("a[data-sid]").forEach((el) => el.onclick = (e) => { e.preventDefault(); document.querySelector('nav [data-tab="sessions"]').click(); showSession(el.dataset.sid); });
   $("#actionList").querySelectorAll("input").forEach((c) => c.onchange = async () => { await api(`/api/actions/${c.dataset.id}/toggle`, { method: "POST" }); loadActions(); });
 }
 $("#digestBtn").onclick = async () => {

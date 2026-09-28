@@ -49,6 +49,9 @@ class MemoryStore:
                 id INTEGER PRIMARY KEY, session_id TEXT, text TEXT, owner TEXT, due TEXT,
                 done INTEGER DEFAULT 0, created TEXT);
         """)
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(actions)")]
+        if "session_title" not in cols:
+            self.db.execute("ALTER TABLE actions ADD COLUMN session_title TEXT DEFAULT ''")
         self.reindex_all()
 
     # ---------- files ----------
@@ -121,7 +124,7 @@ class MemoryStore:
         return "\n\n".join(parts)[:budget_chars]
 
     # ---------- learning from a finished session ----------
-    def apply_extraction(self, ex: dict, session_id: str, date: str) -> dict:
+    def apply_extraction(self, ex: dict, session_id: str, date: str, session_title: str = "") -> dict:
         """Merge an LLM extraction into the markdown memory. Additive only; never deletes."""
         link = f"(session {session_id})"
         changed: list[str] = []
@@ -161,10 +164,14 @@ class MemoryStore:
             for a in ex.get("action_items", []) or []:
                 if isinstance(a, dict) and a.get("text"):
                     self.db.execute(
-                        "INSERT INTO actions(session_id, text, owner, due, created) VALUES (?,?,?,?,?)",
-                        (session_id, a["text"], a.get("owner") or "", a.get("due") or "",
-                         dt.datetime.now().isoformat(timespec="seconds")))
+                        "INSERT INTO actions(session_id, session_title, text, owner, due, created) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (session_id, session_title, a["text"], a.get("owner") or "",
+                         a.get("due") or "", dt.datetime.now().isoformat(timespec="seconds")))
             self.db.commit()
+        if ex.get("action_items"):
+            self.write_actions_md()
+            changed.append("actions.md")
         return {"files": changed}
 
     # ---------- action items ----------
@@ -177,6 +184,24 @@ class MemoryStore:
         with self._lock:
             self.db.execute("UPDATE actions SET done = 1 - done WHERE id = ?", (action_id,))
             self.db.commit()
+        self.write_actions_md()
+
+    def write_actions_md(self) -> None:
+        """Human-readable mirror of every action item (open Obsidian/VS Code on it anytime)."""
+        rows = self.actions(include_done=True)
+
+        def line(a):
+            meta = ", ".join(x for x in (a["owner"] and f"owner: {a['owner']}",
+                                          a["due"] and f"due: {a['due']}") if x)
+            src = f"{a['session_title'] or 'session'} ({a['session_id']}, {a['created'][:10]})"
+            return f"- [{'x' if a['done'] else ' '}] {a['text']}" + (f" — {meta}" if meta else "") + f" · {src}"
+
+        body = ["# Action items", "", "> Generated from the app; tick items in the Actions tab.", "",
+                "## Open", *[line(a) for a in rows if not a["done"]], "",
+                "## Done", *[line(a) for a in rows if a["done"]], ""]
+        p = self.mem / "actions.md"
+        p.write_text("\n".join(body))
+        self.index_file(p)
 
     def delete_session_actions(self, session_id: str) -> None:
         with self._lock:

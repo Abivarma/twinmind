@@ -14,12 +14,19 @@ _THINK = re.compile(r"<think>.*?</think>", re.S)
 class LLM:
     name = "base"
 
+    last_error = ""
+
     def complete(self, system: str, messages: list[dict], max_tokens: int = 4000,
-                 live: bool = False) -> str:
+                 live: bool = False, json_mode: bool | dict = False) -> str:
         raise NotImplementedError
 
     def stream(self, system: str, messages: list[dict], max_tokens: int = 8000) -> Iterator[str]:
         yield self.complete(system, messages, max_tokens)
+
+    def _fail(self, msg: str) -> str:
+        log.error(msg)
+        self.last_error = msg
+        return ""
 
 
 class ClaudeLLM(LLM):
@@ -45,7 +52,8 @@ class ClaudeLLM(LLM):
             kw["extra_body"] = {"fallbacks": "default"}
         return kw
 
-    def complete(self, system, messages, max_tokens=4000, live=False):
+    def complete(self, system, messages, max_tokens=4000, live=False, json_mode=False):
+        self.last_error = ""
         model = self.live_model if live else self.model
         effort = self.live_effort if live else self.deep_effort
         try:
@@ -53,20 +61,17 @@ class ClaudeLLM(LLM):
                 max_tokens=max_tokens, system=system, messages=messages,
                 **self._kwargs(model, effort))
         except self.anthropic.RateLimitError:
-            log.warning("Claude rate limited")
-            return ""
+            return self._fail("Claude rate limited; try again shortly")
         except self.anthropic.APIStatusError as e:
-            log.error("Claude API error %s: %s", e.status_code, e.message)
-            return ""
+            return self._fail(f"Claude API error {e.status_code}: {e.message}")
         except self.anthropic.APIConnectionError as e:
-            log.error("Claude connection error: %s", e)
-            return ""
-        except TypeError as e:  # raised by the SDK when no credentials are configured
-            log.error("Claude not configured (set ANTHROPIC_API_KEY or run `ant auth login`): %s", e)
-            return ""
+            return self._fail(f"Claude connection error: {e}")
+        except TypeError:  # raised by the SDK when no credentials are configured
+            return self._fail("Claude not configured: set ANTHROPIC_API_KEY or run `ant auth login`")
         if resp.stop_reason == "refusal":
-            log.warning("Claude declined the request")
-            return ""
+            return self._fail("Claude declined the request")
+        if resp.stop_reason == "max_tokens":
+            self.last_error = "output hit max_tokens (truncated)"
         return "".join(b.text for b in resp.content if b.type == "text")
 
     def stream(self, system, messages, max_tokens=16000):
@@ -97,27 +102,35 @@ class OllamaLLM(LLM):
         self.num_ctx = cfg.get("ollama_num_ctx", 32768)
         self.keep_alive = cfg.get("ollama_keep_alive", "2h")
 
-    def _body(self, system, messages, max_tokens, stream, live=False):
+    def _body(self, system, messages, max_tokens, stream, live=False, json_mode=False):
         body = {"model": self.live_model if live else self.model, "stream": stream,
                 "keep_alive": self.keep_alive,  # stay loaded in memory: no reload stall mid-call
                 "messages": [{"role": "system", "content": system}, *messages],
                 "options": {"num_predict": max_tokens, "num_ctx": self.num_ctx}}
-        if live:
-            body["think"] = False  # reasoning before every suggestion costs seconds mid-call
+        if live or json_mode:
+            # Mid-call: thinking costs seconds. JSON tasks: thinking tokens share num_predict
+            # and can truncate the JSON, silently losing action items.
+            body["think"] = False
+        if json_mode:
+            # A schema dict makes Ollama enforce required keys (plain "json" only enforces syntax).
+            body["format"] = json_mode if isinstance(json_mode, dict) else "json"
         return body
 
-    def complete(self, system, messages, max_tokens=4000, live=False):
-        body = self._body(system, messages, max_tokens, False, live)
+    def complete(self, system, messages, max_tokens=4000, live=False, json_mode=False):
+        self.last_error = ""
+        body = self._body(system, messages, max_tokens, False, live, json_mode)
         try:
             r = self.httpx.post(self.url, json=body, timeout=300)
             if r.status_code == 400 and "think" in body:  # model without a thinking toggle
                 body.pop("think")
                 r = self.httpx.post(self.url, json=body, timeout=300)
             r.raise_for_status()
-            return _THINK.sub("", r.json()["message"]["content"]).strip()
+            data = r.json()
+            if data.get("done_reason") == "length":
+                self.last_error = "output hit num_predict (truncated)"
+            return _THINK.sub("", data["message"]["content"]).strip()
         except self.httpx.HTTPError as e:
-            log.error("Ollama error: %s", e)
-            return ""
+            return self._fail(f"Ollama error ({self.url}): {e}. Is `ollama serve` running and the model pulled?")
 
     def stream(self, system, messages, max_tokens=8000):
         in_think = False

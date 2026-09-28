@@ -27,6 +27,7 @@ main { flex: 1; min-height: 0; padding: 14px 16px; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--accent); }
+a:has(> button) { text-decoration: none; color: inherit; }
 button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }

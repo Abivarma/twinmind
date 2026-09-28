@@ -93,6 +93,22 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest -q      # uses fake STT/LLM; no model download or API key needed
 ```
 
+### What has been verified end-to-end
+
+These were verified with a synthesized two-voice meeting, real faster-whisper (`small`) and real Ollama (`gemma4:e2b`) on a CPU-only Linux box: live transcription on separate Me/Them channels, private notes, live suggestions, "What would I say", summary + action items (enforced with a JSON schema), people/project/learned memory, `actions.md`, transcript export, search, Ask, daily digest, audio upload, re-summarize, and Chromium's microphone path (fed with recorded speech).
+
+Not verified yet: `mlx-whisper` on Apple Silicon, `gemma4:26b` quality and speed, the Claude path with a real API key, and BlackHole routing on macOS.
+
+### Where things are saved
+
+| What | Where |
+|---|---|
+| Full transcript + summary + action items per call | `data/sessions/<id>.md` (the raw data is in `<id>.json`, saved line by line during the call) |
+| All action items, open and done | `data/memory/actions.md` (also shown in the Actions tab) |
+| People, projects, learned facts | `data/memory/**.md` |
+
+The transcript is written when you press Stop, *before* the summary runs. If the summary fails (no API key, Ollama not running), the session shows the reason; fix it and press **Re-summarize**.
+
 Code layout: `app/stt.py` (chunking and Whisper backends), `app/llm.py` (Claude and Ollama), `app/memory.py` (markdown memory and search), `app/twin.py` (prompts), `app/main.py` (FastAPI and WebSocket), `static/` (UI).
 
 ## Privacy and safety notes

@@ -60,13 +60,17 @@ class SessionStore:
     def write_markdown(self, s: dict, name: str) -> Path:
         sm = s.get("summary") or {}
         parts = [f"# {s['title']}", f"Date: {s['started']}"]
+        status = s.get("summary_status") or ""
+        if status and not status.startswith("ok"):
+            parts.append(f"> Summary status: {status}")
         if sm.get("summary"):
             parts.append("## Summary\n" + sm["summary"])
         if sm.get("decisions"):
             parts.append("## Decisions\n" + "\n".join(f"- {d}" for d in sm["decisions"]))
         if sm.get("action_items"):
             parts.append("## Action items\n" + "\n".join(
-                f"- [ ] {a.get('text')} ({a.get('owner') or '?'})" for a in sm["action_items"]))
+                f"- [ ] {a.get('text')} ({a.get('owner') or '?'}{', due ' + a['due'] if a.get('due') else ''})"
+                for a in sm["action_items"]))
         if sm.get("followups"):
             parts.append("## Follow-ups\n" + sm["followups"])
         parts.append("## Transcript\n" + transcript_text(s["segments"], name))
