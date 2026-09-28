@@ -93,16 +93,26 @@ class OllamaLLM(LLM):
         self.httpx = httpx
         self.url = cfg["ollama_url"].rstrip("/") + "/api/chat"
         self.model = cfg["ollama_model"]
+        self.live_model = cfg.get("ollama_live_model") or self.model
+        self.num_ctx = cfg.get("ollama_num_ctx", 32768)
+        self.keep_alive = cfg.get("ollama_keep_alive", "2h")
 
-    def _body(self, system, messages, max_tokens, stream):
-        return {"model": self.model, "stream": stream,
+    def _body(self, system, messages, max_tokens, stream, live=False):
+        body = {"model": self.live_model if live else self.model, "stream": stream,
+                "keep_alive": self.keep_alive,  # stay loaded in memory: no reload stall mid-call
                 "messages": [{"role": "system", "content": system}, *messages],
-                "options": {"num_predict": max_tokens, "num_ctx": 32768}}
+                "options": {"num_predict": max_tokens, "num_ctx": self.num_ctx}}
+        if live:
+            body["think"] = False  # reasoning before every suggestion costs seconds mid-call
+        return body
 
     def complete(self, system, messages, max_tokens=4000, live=False):
+        body = self._body(system, messages, max_tokens, False, live)
         try:
-            r = self.httpx.post(self.url, json=self._body(system, messages, max_tokens, False),
-                                timeout=300)
+            r = self.httpx.post(self.url, json=body, timeout=300)
+            if r.status_code == 400 and "think" in body:  # model without a thinking toggle
+                body.pop("think")
+                r = self.httpx.post(self.url, json=body, timeout=300)
             r.raise_for_status()
             return _THINK.sub("", r.json()["message"]["content"]).strip()
         except self.httpx.HTTPError as e:

@@ -18,7 +18,10 @@ DEFAULTS: dict = {
         "deep_effort": "medium",
         "fallbacks": True,
         "ollama_url": "http://localhost:11434",
-        "ollama_model": "qwen3:14b",
+        "ollama_model": "gemma4:26b",
+        "ollama_live_model": "",
+        "ollama_num_ctx": 32768,
+        "ollama_keep_alive": "2h",
     },
     "stt": {"backend": "auto", "model": "large-v3-turbo", "language": "", "translate": False},
     "live": {

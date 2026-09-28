@@ -13,7 +13,10 @@ live_effort = "low"         # low latency matters mid-call
 deep_effort = "medium"      # summaries / chat
 fallbacks = true            # server-side refusal fallbacks (Claude API only)
 ollama_url = "http://localhost:11434"
-ollama_model = "qwen3:14b"
+ollama_model = "gemma4:26b"   # 18 GB MoE (~4B active): fits a 36 GB Mac next to Whisper
+ollama_live_model = ""        # optional faster model for in-call suggestions, e.g. "gemma4:12b"
+ollama_num_ctx = 32768        # context window; larger uses more memory
+ollama_keep_alive = "2h"      # keep the model loaded between calls
 
 [stt]
 # "auto" -> mlx-whisper on Apple Silicon, else faster-whisper

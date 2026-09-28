@@ -46,7 +46,19 @@ brew install ffmpeg            # needed only for "Upload audio"
 Then pick an LLM:
 
 - **Claude (best reasoning):** `export ANTHROPIC_API_KEY=...` (or `ant auth login`) before `./twin`. The default model is `claude-opus-5`. Transcripts are sent to the Anthropic API.
-- **Fully local:** `brew install ollama && ollama pull qwen3:14b`, then set `provider = "ollama"` in `config.toml`. On an M5 Pro, a 14B model gives reasonable latency. Its reasoning is noticeably weaker than Claude's.
+- **Fully local:** `brew install ollama && ollama pull gemma4:26b`, then set `provider = "ollama"` in `config.toml`. After the download, nothing leaves the Mac. Its reasoning is noticeably weaker than Claude's.
+
+### Choosing a local model (by unified memory)
+
+For live suggestions, the model spends most of its time reading the 4–6K-token prompt (profile + memories + transcript) before it writes anything. Mixture-of-experts models (few active parameters) read the prompt several times faster than dense models, so prefer them.
+
+| Mac memory | `ollama_model` | Notes |
+|---|---|---|
+| 24 GB | `gemma4:12b` (7.6 GB) | same model for live and summaries |
+| 32–36 GB | **`gemma4:26b`** (18 GB, ~4B active) | default. Leaves room for Whisper, Chrome and the KV cache |
+| 48 GB+ | `qwen3.5:35b-a3b` (24 GB) | A/B test it against gemma4:26b on your own calls |
+
+Avoid dense 27–31B models for live use: the prompt alone takes 10–25 s to read. Models are stored in `~/.ollama/models` (set `OLLAMA_MODELS` to use an external SSD); Whisper is cached in `~/.cache/huggingface`.
 
 The first run downloads Whisper `large-v3-turbo` (about 1.6 GB). If your machine has little memory, set `model = "small"`.
 

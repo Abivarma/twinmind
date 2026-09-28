@@ -162,3 +162,25 @@ def test_chat_upload_digest_and_memory_api(setup):
     assert client.get("/api/search", params={"q": "quantum"}).json()[0]["title"] == "Zeus"
     assert client.put("/api/memory/file", json={"path": "../x.md", "content": ""}).status_code == 400
     assert client.get("/api/health").json()["stt"] == "fake"
+
+
+def test_ollama_live_disables_thinking_and_uses_live_model(monkeypatch):
+    import httpx
+    from app.llm import OllamaLLM
+
+    sent = []
+
+    def fake_post(url, json, timeout):
+        sent.append(dict(json))
+        if json.get("think") is False and len(sent) == 1:
+            return httpx.Response(400, text="does not support thinking", request=httpx.Request("POST", url))
+        return httpx.Response(200, json={"message": {"content": "<think>x</think>hi"}},
+                              request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    llm = OllamaLLM({"ollama_url": "http://x", "ollama_model": "big", "ollama_live_model": "small"})
+    assert llm.complete("sys", [{"role": "user", "content": "q"}], live=True) == "hi"
+    assert sent[0]["model"] == "small" and sent[0]["think"] is False and sent[0]["keep_alive"] == "2h"
+    assert "think" not in sent[1]  # retried without the toggle
+    llm.complete("sys", [{"role": "user", "content": "q"}])
+    assert sent[-1]["model"] == "big" and "think" not in sent[-1]
