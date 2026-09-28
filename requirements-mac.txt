@@ -1,0 +1,3 @@
+# Apple Silicon: Whisper on the GPU via MLX (recommended on M-series Macs)
+-r requirements.txt
+mlx-whisper>=0.4

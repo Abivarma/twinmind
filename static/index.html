@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TwinMind Local</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="recDot"></span> TwinMind <small>local</small></div>
+  <nav>
+    <button data-tab="live" class="active">Live</button>
+    <button data-tab="ask">Ask</button>
+    <button data-tab="sessions">Sessions</button>
+    <button data-tab="memory">Memory</button>
+    <button data-tab="actions">Actions</button>
+  </nav>
+  <div class="health" id="health">…</div>
+</header>
+
+<main>
+  <!-- LIVE -->
+  <section id="tab-live" class="tab active">
+    <div class="controls">
+      <input id="title" placeholder="What's this call about? (helps the twin pull the right memories)">
+      <label class="chk"><input type="checkbox" id="useMic" checked> My mic</label>
+      <select id="themSource" title="Where the other side's audio comes from">
+        <option value="none">No call audio</option>
+        <option value="display">Share tab/system audio</option>
+      </select>
+      <button id="startBtn" class="primary">Start</button>
+      <button id="stopBtn" class="danger" hidden>Stop</button>
+      <span class="meters"><i id="meterMe" title="Me"></i><i id="meterThem" title="Them"></i></span>
+    </div>
+    <div class="live-grid">
+      <div class="panel">
+        <h3>Transcript</h3>
+        <div id="transcript" class="scroll"><p class="muted">Press Start. Use headphones on calls so your mic doesn't pick up the other side.</p></div>
+        <form id="noteForm" class="row"><input id="noteInput" placeholder="Private note (N)…" autocomplete="off"><button>Add</button></form>
+      </div>
+      <div class="panel twin">
+        <h3>Your twin <span id="thinking" class="muted" hidden>thinking…</span></h3>
+        <div class="row">
+          <button id="sayBtn" class="primary" disabled title="Shortcut: R">What would I say? (R)</button>
+          <button id="refreshBtn" disabled title="Shortcut: S">Refresh (S)</button>
+        </div>
+        <form id="askLive" class="row"><input id="askLiveInput" placeholder="They asked me… / How should I answer…" autocomplete="off"><button>Ask</button></form>
+        <div id="suggestions" class="scroll"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ASK -->
+  <section id="tab-ask" class="tab">
+    <div id="chatLog" class="scroll chat"></div>
+    <form id="chatForm" class="row"><input id="chatInput" placeholder="Ask about your meetings, people, projects… or 'what do I think about X?'" autocomplete="off"><button class="primary">Ask</button></form>
+  </section>
+
+  <!-- SESSIONS -->
+  <section id="tab-sessions" class="tab">
+    <div class="split">
+      <div class="panel list">
+        <div class="row"><label class="upload">Upload audio<input type="file" id="uploadInput" accept="audio/*,video/*" hidden></label></div>
+        <div id="sessionList" class="scroll"></div>
+      </div>
+      <div class="panel" id="sessionView"><p class="muted">Select a session.</p></div>
+    </div>
+  </section>
+
+  <!-- MEMORY -->
+  <section id="tab-memory" class="tab">
+    <div class="split">
+      <div class="panel list">
+        <form id="searchForm" class="row"><input id="searchInput" placeholder="Search memory…"></form>
+        <div id="fileList" class="scroll"></div>
+      </div>
+      <div class="panel editor">
+        <div class="row"><strong id="filePath">profile.md</strong><span class="grow"></span>
+          <input id="newFile" placeholder="new: people/jane-doe.md"><button id="newFileBtn">New</button>
+          <button id="saveBtn" class="primary">Save</button></div>
+        <textarea id="fileContent" spellcheck="false"></textarea>
+      </div>
+    </div>
+  </section>
+
+  <!-- ACTIONS -->
+  <section id="tab-actions" class="tab">
+    <div class="split">
+      <div class="panel"><h3>Open action items</h3><div id="actionList" class="scroll"></div></div>
+      <div class="panel"><h3>Daily digest <button id="digestBtn">Generate for today</button></h3><div id="digest" class="scroll md"></div></div>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

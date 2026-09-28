@@ -1,0 +1,34 @@
+# Copy to config.toml and edit. Every key is optional; these are the defaults.
+
+[user]
+name = "Me"                 # how the twin refers to you in prompts
+
+[llm]
+# "anthropic" -> Claude API (needs ANTHROPIC_API_KEY or `ant auth login`)
+# "ollama"    -> fully local model via Ollama (nothing leaves the Mac)
+provider = "anthropic"
+model = "claude-opus-5"     # post-call summaries, memory extraction, chat
+live_model = ""             # optional faster model for in-call suggestions ("" = same as model)
+live_effort = "low"         # low latency matters mid-call
+deep_effort = "medium"      # summaries / chat
+fallbacks = true            # server-side refusal fallbacks (Claude API only)
+ollama_url = "http://localhost:11434"
+ollama_model = "qwen3:14b"
+
+[stt]
+# "auto" -> mlx-whisper on Apple Silicon, else faster-whisper
+backend = "auto"
+model = "large-v3-turbo"    # tiny | base | small | medium | large-v3 | large-v3-turbo
+language = ""               # "" = auto-detect per chunk (99 Whisper languages)
+translate = false           # true = translate everything to English
+
+[live]
+suggest_interval_sec = 20   # how often the twin refreshes suggestions during a call
+min_chunk_sec = 2.5         # transcription chunking (cut on pauses)
+max_chunk_sec = 12
+silence_rms = 0.008         # raise if a noisy room produces junk transcripts
+keep_audio = false          # TwinMind default: audio discarded after transcription
+
+[server]
+host = "127.0.0.1"
+port = 8765

@@ -1,0 +1,9 @@
+{
+  "name": "TwinMind Local",
+  "short_name": "TwinMind",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111214",
+  "theme_color": "#3355ff",
+  "icons": [{ "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
